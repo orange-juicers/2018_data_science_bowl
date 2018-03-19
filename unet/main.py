@@ -7,6 +7,7 @@ from tqdm import tqdm
 import torch as t
 from torch.utils import data
 from torchvision import transforms as tsf
+import torchvision.utils as v_utils
 from preprocess import process
 import utils as utils
 import PIL
@@ -16,34 +17,51 @@ import unet
 from testData import *
 import scipy.misc
 
-TRAIN_PATH = './data/stage1_train.pth'
-TEST_PATH = './data/stage1_test.pth'
+THIS_DIR = os.path.dirname(__file__)
+TRAIN_PATH = THIS_DIR + '/data/stage1_train.pth'
+TEST_PATH = THIS_DIR + '/data/stage1_test.pth'
 
-test = process('./data/stage1_test/',False)
+test = process(THIS_DIR + '/data/stage1_test/',False)
 t.save(test, TEST_PATH)
-train_data = process('./data/stage1_train/')
-t.save(train_data, TRAIN_PATH)
 
-s_trans = tsf.Compose([
+train_data = process(THIS_DIR + '/data/stage1_train/')
+t.save(train_data, TRAIN_PATH)
+# ============================
+# Initialize Hyper-parameters
+# ============================
+num_epochs = 3
+train_batch_size = 4
+learning_rate = 1e-3
+test_batch_size = 1
+num_workers = 2
+# ================
+# Train
+# ================
+# source image transform
+src_trans = tsf.Compose([
     tsf.ToPILImage(),
     tsf.Resize((128,128)),
     tsf.ToTensor(),
     tsf.Normalize(mean = [0.5,0.5,0.5],std = [0.5,0.5,0.5])
-]
-)
-t_trans = tsf.Compose([
+])
+# target image transform
+tgt_trans = tsf.Compose([
     tsf.ToPILImage(),
     tsf.Resize((128,128),interpolation=PIL.Image.NEAREST),
     tsf.ToTensor(),]
 )
-dataset = nuclei.NUCLEI(train_data,s_trans,t_trans)
-dataloader = t.utils.data.DataLoader(dataset,num_workers=2,batch_size=4)
 
+# load the train dataset
+train_dataset = nuclei.NUCLEI(train_data,src_trans,tgt_trans)
+train_loader = t.utils.data.DataLoader(dataset = train_dataset,num_workers=num_workers,batch_size=train_batch_size, shuffle=True)
+
+# load the model
 model = unet.UNet(3,1)#.cuda()
-optimizer = t.optim.Adam(model.parameters(),lr = 1e-3)
+optimizer = t.optim.Adam(model.parameters(),lr = learning_rate)
 
-for epoch in range(2):
-    for x_train, y_train  in tqdm(dataloader):
+# iterate over the train data set for training
+for epoch in range(num_epochs):
+    for i, (x_train, y_train)  in enumerate(train_loader):
         x_train = t.autograd.Variable(x_train)#.cuda())
         y_train = t.autograd.Variable(y_train)#.cuda())
         optimizer.zero_grad()
@@ -51,21 +69,42 @@ for epoch in range(2):
         loss = soft_dice_loss(o, y_train)
         loss.backward()
         optimizer.step()
+        if (i+1) % 50 == 0:                         
+            print('Epoch [%d/%d], Step [%d/%d], Loss: %.4f'%(epoch+1, num_epochs, i+1, len(train_dataset)//train_batch_size, loss.data[0]))
 
-testset = TestDataset(TEST_PATH, s_trans)
-testdataloader = t.utils.data.DataLoader(testset,num_workers=2,batch_size=2)
+# Q: Can we save the weights at this time to a file?
+# torch.save(model.state_dict(), 'MODEL_EPOCH{}_LOSS{}.pth'.format(epoch+1, l))
+
+# ======================
+# Test
+# ======================
+# Q: Can we load the saved weights at this time?
+
+# Dropout and BatchNorm (and maybe some custom modules) behave differently during training and evaluation. 
+# You must let the model know when to switch to eval mode by calling .eval() on the model.
+# https://stackoverflow.com/questions/48146926/whats-the-meaning-of-function-eval-in-torch-nn-module
 model = model.eval()
-for name, data in testdataloader:
-    im = PIL.Image.fromarray(data[1].data.cpu().permute(1,2,0).numpy()*0.5+0.5)
-    im.save("./data/output/"+ name + "-i.png")
-    data = t.autograd.Variable(data, volatile=True)#.cuda())
-    o = model(data)
-    im = PIL.Image.fromarray(o[1][0].data.cpu().numpy())
-    im.save("./data/output/" + name + "-o.png")
-    #break
 
-tm=o[1][0].data.cpu().numpy()
-plt.subplot(121)
-plt.imshow(data[1].data.cpu().permute(1,2,0).numpy()*0.5+0.5)
-plt.subplot(122)
-plt.imshow(tm)
+# load test data
+test_dataset = TestDataset(TEST_PATH, src_trans)
+test_loader = t.utils.data.DataLoader(dataset = test_dataset,num_workers=num_workers,batch_size=test_batch_size, shuffle=False)
+
+# create output dir
+OUTPUT_DIR= THIS_DIR+"/data/output"
+if not os.path.exists(OUTPUT_DIR):
+    os.removedirs(OUTPUT_DIR)
+    os.makedirs(OUTPUT_DIR)
+
+# iterate over test data and generate output images
+for name, data in test_loader:
+    inputVar = t.autograd.Variable(data, volatile=True)#.cuda())
+    v_utils.save_image(inputVar.cpu().data, THIS_DIR+"/data/output/"+ name[0] + "-i.png")
+    outputVar = model(inputVar)
+    v_utils.save_image(outputVar.cpu().data, THIS_DIR+"/data/output/"+ name[0] + "-o.png")
+
+# in the end plot 1 image
+#tm=o[1][0].data.cpu().numpy()
+#plt.subplot(121)
+#plt.imshow(data[1].data.cpu().permute(1,2,0).numpy()*0.5+0.5)
+#plt.subplot(122)
+#plt.imshow(tm)

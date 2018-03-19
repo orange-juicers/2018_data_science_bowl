@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from PIL import Image
+#from PIL import Image
 from skimage import io
 import numpy as np
 import torch as t
@@ -18,25 +18,26 @@ def process(file_path, has_mask=True):
         item = {}
         imgs = []
         for image in (file/'images').iterdir():
-            img = io.imread(image)
+            img = io.imread(image) # (256, 256, 4) ~ this is an RGBA image 
             imgs.append(img)
+        # verify there is only one input image
         assert len(imgs)==1
-        if img.shape[2]>3:
-            assert(img[:,:,3]!=255).sum()==0
-        img = img[:,:,:3]
+        if img.shape[2]>3: # check if RGB (3) or RGBA (4)
+            assert(img[:,:,3]!=255).sum()==0 # Q: Is it a check to make sure it is RGB?
+        img = img[:,:,:3] # convert RGBA to RGB
 
         if has_mask:
             mask_files = list((file/'masks').iterdir())
             masks = None
             for ii,mask in enumerate(mask_files):
                 mask = io.imread(mask)
-                assert (mask[(mask!=0)]==255).all()
+                assert (mask[(mask!=0)]==255).all() #??
                 if masks is None:
                     H,W = mask.shape
                     masks = np.zeros((len(mask_files),H,W))
                 masks[ii] = mask
             tmp_mask = masks.sum(0)
-            assert (tmp_mask[tmp_mask!=0] == 255).all()
+            assert (tmp_mask[tmp_mask!=0] == 255).all() # ??
             for ii,mask in enumerate(masks):
                 masks[ii] = mask/255 * (ii+1)
             mask = masks.sum(0)
