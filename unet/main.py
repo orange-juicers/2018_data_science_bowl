@@ -14,8 +14,10 @@ import PIL
 import nuclei
 from lossUtil import *
 import unet
+from average import *
 from testData import *
 import scipy.misc
+import uuid
 
 THIS_DIR = os.path.dirname(__file__)
 TRAIN_PATH = THIS_DIR + '/data/stage1_train.pth'
@@ -29,8 +31,8 @@ t.save(train_data, TRAIN_PATH)
 # ============================
 # Initialize Hyper-parameters
 # ============================
-num_epochs = 3
-train_batch_size = 4
+num_epochs = 20
+train_batch_size = 10
 learning_rate = 1e-3
 test_batch_size = 1
 num_workers = 2
@@ -59,8 +61,16 @@ train_loader = t.utils.data.DataLoader(dataset = train_dataset,num_workers=num_w
 model = unet.UNet(3,1)#.cuda()
 optimizer = t.optim.Adam(model.parameters(),lr = learning_rate)
 
+# =============
+# checkpoint
+# ===========
+checkpoint_file = THIS_DIR + '/data/checkpoint-'+str(uuid.uuid4())+'.pth.tar'
+
 # iterate over the train data set for training
+best_loss = 99999
 for epoch in range(num_epochs):
+    train_loss = Average()
+    model.train()
     for i, (x_train, y_train)  in enumerate(train_loader):
         x_train = t.autograd.Variable(x_train)#.cuda())
         y_train = t.autograd.Variable(y_train)#.cuda())
@@ -69,9 +79,19 @@ for epoch in range(num_epochs):
         loss = soft_dice_loss(o, y_train)
         loss.backward()
         optimizer.step()
-        if (i+1) % 50 == 0:                         
-            print('Epoch [%d/%d], Step [%d/%d], Loss: %.4f'%(epoch+1, num_epochs, i+1, len(train_dataset)//train_batch_size, loss.data[0]))
-
+        train_loss.update(loss.data[0], x_train.size(0))
+    
+    print("Epoch {}, Loss: {}".format(epoch+1, train_loss.avg))
+    is_best = bool(train_loss.avg < best_loss)
+    if is_best:
+        best_loss = train_loss.avg
+    #https://blog.floydhub.com/checkpointing-tutorial-for-tensorflow-keras-and-pytorch/
+    utils.save_checkpoint({
+        'epoch': epoch + 1,
+        'state_dict': model.state_dict(),
+        'optimizer' : optimizer.state_dict(),
+        'best_loss': best_loss
+    }, is_best, checkpoint_file)
 # Q: Can we save the weights at this time to a file?
 # torch.save(model.state_dict(), 'MODEL_EPOCH{}_LOSS{}.pth'.format(epoch+1, l))
 
@@ -90,7 +110,7 @@ test_dataset = TestDataset(TEST_PATH, src_trans)
 test_loader = t.utils.data.DataLoader(dataset = test_dataset,num_workers=num_workers,batch_size=test_batch_size, shuffle=False)
 
 # create output dir
-OUTPUT_DIR= THIS_DIR+"/data/output"
+OUTPUT_DIR= THIS_DIR+"/data/output/"
 if not os.path.exists(OUTPUT_DIR):
     os.removedirs(OUTPUT_DIR)
     os.makedirs(OUTPUT_DIR)
